@@ -17,3 +17,8 @@ openssl x509 -req -days 3650 -in ./certificates/rootCA.csr -signkey ./certificat
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out ./certificates/server-private-key.pem
 openssl req -new -key ./certificates/server-private-key.pem -out ./certificates/server.csr -subj "/CN=localhost"
 openssl x509 -req -days 365 -in ./certificates/server.csr -CA ./certificates/rootCA.crt -CAkey ./certificates/rootCA-private-key.pem -CAcreateserial -out ./certificates/server.crt
+
+# Generate client certificate
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out ./certificates/client-private-key.pem
+openssl req -new -key ./certificates/client-private-key.pem -out ./certificates/client.csr -subj "/CN=localhost"
+openssl x509 -req -days 365 -in ./certificates/client.csr -CA ./certificates/rootCA.crt -CAkey ./certificates/rootCA-private-key.pem -CAcreateserial -out ./certificates/client.crt
