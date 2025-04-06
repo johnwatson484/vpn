@@ -1,8 +1,9 @@
-import { execSync, spawn } from 'child_process'
+import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import tls from 'tls'
+import { Buffer } from 'buffer'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,8 +28,39 @@ try {
   process.exit(1)
 }
 
+// Ensure the TUN interface is removed on exit
+function cleanupTunInterface () {
+  try {
+    console.log('Cleaning up TUN interface...')
+    // Check if the TUN interface exists
+    const interfaces = execSync('ip link show').toString()
+    if (interfaces.includes('tun0')) {
+      execSync('sudo ip link delete tun0')
+      console.log('TUN interface deleted')
+    } else {
+      console.log('TUN interface does not exist, skipping deletion')
+    }
+  } catch (err) {
+    console.error('Error deleting TUN interface:', err.message)
+  }
+}
+
+process.on('exit', cleanupTunInterface)
+process.on('SIGINT', () => process.exit(0)) // Handle Ctrl+C
+process.on('SIGTERM', () => process.exit(0)) // Handle termination signals
+
 // Open the TUN device
-const tunFd = fs.openSync('/dev/net/tun', 'r+')
+let tunFd
+try {
+  // Open the TUN device directly
+  tunFd = fs.openSync('/dev/net/tun', 'r+')
+
+  // Set up the TUN interface
+  console.log('TUN device opened successfully')
+} catch (err) {
+  console.error('Error opening TUN device:', err.message)
+  process.exit(1)
+}
 
 // Connect to the VPN server
 const client = tls.connect(8089, 'localhost', tlsOptions, () => {
@@ -44,19 +76,25 @@ const client = tls.connect(8089, 'localhost', tlsOptions, () => {
 // Read packets from the TUN interface and send them to the VPN server
 const buffer = Buffer.alloc(1500) // MTU size
 function readFromTun () {
-  fs.read(tunFd, buffer, 0, buffer.length, null, (err, bytesRead) => {
-    if (err) {
-      console.error('Error reading from TUN interface:', err.message)
-      return
+  if (!tunFd) {
+    console.error('TUN device not initialized')
+    return
+  }
+
+  try {
+    const bytesRead = fs.readSync(tunFd, buffer, 0, buffer.length)
+    if (bytesRead > 0) {
+      const packet = buffer.slice(0, bytesRead)
+      console.log('Sending packet to VPN server:', packet.toString('hex'))
+      client.write(packet)
     }
-
-    const packet = buffer.slice(0, bytesRead)
-    console.log('Sending packet to VPN server:', packet.toString('hex'))
-    client.write(packet) // Send the packet to the VPN server
-
     // Continue reading from the TUN interface
-    readFromTun()
-  })
+    setImmediate(readFromTun)
+  } catch (err) {
+    console.error('Error reading from TUN interface:', err.message)
+    // Add a small delay before retrying
+    setTimeout(readFromTun, 1000)
+  }
 }
 readFromTun()
 
@@ -78,11 +116,5 @@ client.on('error', (err) => {
 // Handle connection close
 client.on('close', () => {
   console.log('Connection to VPN server closed')
-  // Clean up the TUN interface
-  try {
-    execSync('sudo ip link delete tun0')
-    console.log('TUN interface deleted')
-  } catch (err) {
-    console.error('Error deleting TUN interface:', err.message)
-  }
+  process.exit(0) // Trigger cleanup
 })
